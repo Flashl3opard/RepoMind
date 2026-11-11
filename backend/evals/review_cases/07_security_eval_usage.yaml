@@ -1,0 +1,7 @@
+description: >
+  A new calculate() function evaluates arbitrary input with eval() -- a classic
+  injection risk that should be flagged security (and likely missing_test too, but
+  that's not required for this case to pass).
+expected:
+  - file: calculator.py
+    category: security

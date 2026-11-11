@@ -1066,6 +1066,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-google-genai" },
@@ -1094,6 +1095,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13,<1.14" },
     { name = "fastapi", specifier = ">=0.115,<0.116" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain", specifier = ">=0.3.30" },
     { name = "langchain-core", specifier = ">=0.3,<0.4" },
     { name = "langchain-google-genai", specifier = ">=2.0,<2.1" },

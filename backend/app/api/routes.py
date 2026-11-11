@@ -13,13 +13,19 @@ from app.api.schemas import (
     AskResponse,
     CitationResponse,
     DebugChunkResponse,
+    FindingResponse,
     RepoCreateRequest,
     RepoCreateResponse,
     RepoStatusResponse,
+    ReviewDebugInfo,
+    ReviewRequest,
+    ReviewResponse,
 )
 from app.config import get_settings
 from app.db.models import Chunk, File, Repository, RepositoryStatus
 from app.db.session import SessionLocal, get_db
+from app.review.github import GitHubError, GitHubRateLimitError, PullRequestNotFoundError
+from app.review.graph import ReviewInputError, ReviewTooLargeError, resolve_diff_text, run_review
 from app.services.embeddings import get_embeddings
 from app.services.ingestion import ingest_repository
 
@@ -143,5 +149,73 @@ def ask_repository(
         confidence=result.confidence,
         retrieved_count=result.retrieved_count,
         expanded_count=result.expanded_count,
+        debug=debug_info,
+    )
+
+
+@router.post("/{repository_id}/review", response_model=ReviewResponse)
+def review_repository(
+    repository_id: uuid.UUID, payload: ReviewRequest, debug: bool = False, db: Session = Depends(get_db)
+) -> ReviewResponse:
+    """Review a PR against this repo's indexed base branch. Read-only: nothing from
+    the PR is written to the database."""
+    repository = db.get(Repository, repository_id)
+    if repository is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    if repository.status != RepositoryStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409, detail=f"repository ingestion is not complete (status: {repository.status})"
+        )
+
+    settings = get_settings()
+
+    try:
+        diff_text = resolve_diff_text(
+            payload.diff, payload.pr_url, settings.GITHUB_TOKEN, settings.GITHUB_TIMEOUT_SECONDS
+        )
+    except ReviewInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PullRequestNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GitHubRateLimitError as exc:
+        headers = {"Retry-After": str(int(exc.retry_after_seconds))} if exc.retry_after_seconds else None
+        raise HTTPException(status_code=429, detail=str(exc), headers=headers) from exc
+    except GitHubError as exc:
+        raise HTTPException(status_code=502, detail=f"could not fetch PR diff: {exc}") from exc
+
+    try:
+        result = run_review(
+            db,
+            repository,
+            diff_text,
+            embeddings=get_embeddings(settings),
+            chat_model=build_chat_model(settings, timeout=settings.REVIEW_LLM_TIMEOUT_SECONDS),
+            max_files=settings.REVIEW_MAX_FILES,
+            max_diff_bytes=settings.REVIEW_MAX_DIFF_BYTES,
+            max_diff_tokens=settings.REVIEW_MAX_DIFF_TOKENS,
+            max_expanded_per_symbol=settings.REVIEW_MAX_EXPANDED_PER_SYMBOL,
+            max_context_tokens=settings.REVIEW_MAX_CONTEXT_TOKENS,
+            max_findings_per_file=settings.REVIEW_MAX_FINDINGS_PER_FILE,
+            retrieval_top_k=settings.REVIEW_RETRIEVAL_TOP_K,
+        )
+    except ReviewInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ReviewTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+    debug_info = None
+    if debug and settings.REVIEW_DEBUG_ENABLED:
+        debug_info = ReviewDebugInfo(
+            skip_notes=result.skip_notes,
+            dropped_count=result.dropped_count,
+            changed_symbols=result.changed_symbols_debug,
+            context=result.context_debug,
+        )
+
+    return ReviewResponse(
+        findings=[FindingResponse(**f) for f in result.verified_findings],
+        summary=result.summary,
+        risk_level=result.risk_level,
+        files_reviewed=result.files_reviewed,
         debug=debug_info,
     )

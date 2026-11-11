@@ -1,0 +1,26 @@
+diff --git a/calculator.py b/calculator.py
+--- a/calculator.py
++++ b/calculator.py
+@@ -9,2 +9,2 @@
+-def multiply(a, b):
+-    return a * b
++def product(a, b):
++    return a * b
+diff --git a/main.py b/main.py
+--- a/main.py
++++ b/main.py
+@@ -1,1 +1,1 @@
+-from calculator import add, subtract, multiply, divide
++from calculator import add, subtract, product, divide
+@@ -8,1 +8,1 @@
+-    total = multiply(total, 4)
++    total = product(total, 4)
+diff --git a/test_calculator.py b/test_calculator.py
+--- a/test_calculator.py
++++ b/test_calculator.py
+@@ -1,1 +1,1 @@
+-from calculator import add, divide, multiply, subtract
++from calculator import add, divide, product, subtract
+@@ -13,1 +13,1 @@
+-    assert multiply(2, 3) == 6
++    assert product(2, 3) == 6

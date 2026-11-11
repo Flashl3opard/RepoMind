@@ -1,0 +1,7 @@
+description: >
+  add() gains a required third parameter with no default. main.py (untouched by this
+  diff) still calls add(1, 2) with the old arity -- a real breaking change with a
+  discoverable stale caller.
+expected:
+  - file: calculator.py
+    category: breaking_change

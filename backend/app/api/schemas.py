@@ -1,7 +1,7 @@
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.models import RepositoryStatus
 
@@ -60,3 +60,39 @@ class AskResponse(BaseModel):
     retrieved_count: int
     expanded_count: int
     debug: AskDebugInfo | None = None
+
+
+class ReviewRequest(BaseModel):
+    pr_url: str | None = Field(None, description="https://github.com/owner/repo/pull/N")
+    diff: str | None = Field(None, description="Raw unified diff text; no network needed")
+
+    @model_validator(mode="after")
+    def _exactly_one_of_pr_url_or_diff(self) -> "ReviewRequest":
+        if (self.pr_url is None) == (self.diff is None):
+            raise ValueError("Provide exactly one of 'pr_url' or 'diff'")
+        return self
+
+
+class FindingResponse(BaseModel):
+    file: str
+    start_line: int
+    end_line: int
+    severity: Literal["info", "warning", "error"]
+    category: Literal["breaking_change", "bug_risk", "missing_test", "security", "style"]
+    message: str
+    evidence: list[str]
+
+
+class ReviewDebugInfo(BaseModel):
+    skip_notes: list[str]
+    dropped_count: int
+    changed_symbols: list[dict[str, Any]]
+    context: list[dict[str, Any]]
+
+
+class ReviewResponse(BaseModel):
+    findings: list[FindingResponse]
+    summary: str
+    risk_level: Literal["low", "medium", "high"]
+    files_reviewed: int
+    debug: ReviewDebugInfo | None = None

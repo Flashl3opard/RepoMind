@@ -1,0 +1,5 @@
+description: >
+  multiply() is renamed to product() with every call site and test updated in the same
+  PR (calculator.py, main.py, test_calculator.py). A true, fully-covered rename --
+  nothing should be flagged breaking_change since no caller is left stale.
+expected: []

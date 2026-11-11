@@ -1,0 +1,7 @@
+diff --git a/utils.py b/utils.py
+deleted file mode 100644
+--- a/utils.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-def format_result(value):
+-    return f"Result: {value}"
