@@ -1,0 +1,4 @@
+description: >
+  A binary file change (should be skipped with a note, never crash) plus a harmless
+  trailing comment in calculator.py that touches no symbol. Nothing should be flagged.
+expected: []

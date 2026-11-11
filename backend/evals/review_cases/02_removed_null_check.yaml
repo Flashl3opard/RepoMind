@@ -1,0 +1,7 @@
+description: >
+  divide() loses its "division by zero" guard, leaving a bare `a / b`. A real bug risk
+  (now raises ZeroDivisionError instead of a clear ValueError) but not a signature
+  change, so it must not be flagged as breaking_change.
+expected:
+  - file: calculator.py
+    category: bug_risk

@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     QA_MAX_EXPANDED_CHUNKS: int = 6
     QA_MAX_ATTEMPTS: int = 2
 
+    # PR reviewer (app/review/)
+    GITHUB_TOKEN: str | None = None
+    GITHUB_TIMEOUT_SECONDS: float = 15.0
+    REVIEW_LLM_TIMEOUT_SECONDS: float = 30.0
+    REVIEW_MAX_FILES: int = 30
+    REVIEW_MAX_DIFF_BYTES: int = 300_000
+    REVIEW_MAX_DIFF_TOKENS: int = 20_000
+    REVIEW_MAX_CONTEXT_TOKENS: int = 6_000
+    REVIEW_MAX_FINDINGS_PER_FILE: int = 5
+    REVIEW_MAX_EXPANDED_PER_SYMBOL: int = 6
+    REVIEW_RETRIEVAL_TOP_K: int = 6
+    # ?debug=true on POST /repos/{id}/review only returns its extra detail when this
+    # is enabled -- off by default so internal pipeline state isn't exposed publicly.
+    REVIEW_DEBUG_ENABLED: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

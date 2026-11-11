@@ -1,0 +1,7 @@
+description: >
+  utils.py (and its only function, format_result) is deleted entirely. main.py
+  (untouched by this diff) still imports and calls format_result -- a stale caller of
+  a removed symbol.
+expected:
+  - file: utils.py
+    category: breaking_change

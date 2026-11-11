@@ -1,0 +1,7 @@
+description: >
+  A brand-new power() function is added to calculator.py. No test file references it
+  (test_calculator.py only covers add/subtract/multiply/divide) -- should be flagged
+  missing_test.
+expected:
+  - file: calculator.py
+    category: missing_test
