@@ -1,0 +1,33 @@
+# Baseline Q&A eval seed. Each question is asked against the small fixture repo that
+# evals/run_qa_eval.py builds (calculator.py, utils.py, main.py). `expected_files` lists
+# the file(s) we'd consider a correct answer must cite at least one of.
+- id: 1
+  question: "What does the add function do?"
+  expected_files: ["calculator.py"]
+- id: 2
+  question: "How is subtraction implemented?"
+  expected_files: ["calculator.py"]
+- id: 3
+  question: "What happens when dividing by zero?"
+  expected_files: ["calculator.py"]
+- id: 4
+  question: "What does the multiply function return?"
+  expected_files: ["calculator.py"]
+- id: 5
+  question: "What does main do, step by step?"
+  expected_files: ["main.py"]
+- id: 6
+  question: "Which functions does main call?"
+  expected_files: ["main.py", "calculator.py"]
+- id: 7
+  question: "How is the final result formatted before main returns it?"
+  expected_files: ["utils.py"]
+- id: 8
+  question: "What does format_result do?"
+  expected_files: ["utils.py"]
+- id: 9
+  question: "What exception does divide raise and under what condition?"
+  expected_files: ["calculator.py"]
+- id: 10
+  question: "Where is the add function imported from in main.py?"
+  expected_files: ["main.py"]

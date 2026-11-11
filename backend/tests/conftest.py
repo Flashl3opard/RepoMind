@@ -60,3 +60,52 @@ def tiny_git_repo(tmp_path: Path) -> str:
     run("commit", "-q", "-m", "initial commit")
 
     return str(repo_dir)
+
+
+@pytest.fixture
+def qa_fixture_repo(tmp_path: Path) -> str:
+    """A couple of related functions across two files, for exercising hybrid retrieval
+    and one-hop graph expansion (main calls add and subtract)."""
+    repo_dir = tmp_path / "qa-fixture-repo"
+    repo_dir.mkdir()
+    (repo_dir / "calculator.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n\n"
+        "def subtract(a, b):\n"
+        "    return a - b\n"
+    )
+    (repo_dir / "main.py").write_text(
+        "from calculator import add, subtract\n"
+        "\n\n"
+        "def main():\n"
+        "    total = add(1, 2)\n"
+        "    return subtract(total, 1)\n"
+    )
+
+    def run(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+    run("init", "-q")
+    run("config", "user.email", "test@example.com")
+    run("config", "user.name", "Test")
+    run("add", ".")
+    run("commit", "-q", "-m", "initial commit")
+
+    return str(repo_dir)
+
+
+@pytest.fixture
+def ingested_repo(db_session: Session, qa_fixture_repo: str):
+    """Ingests `qa_fixture_repo` with FakeEmbeddings and returns the completed Repository row."""
+    from app.db.models import Repository, RepositoryStatus
+    from app.services.ingestion import ingest_repository
+    from tests.fakes import FakeEmbeddings
+
+    repository = Repository(url=qa_fixture_repo, name="qa-fixture-repo", status=RepositoryStatus.PENDING)
+    db_session.add(repository)
+    db_session.commit()
+
+    ingest_repository(db_session, repository.id, embeddings=FakeEmbeddings())
+    db_session.refresh(repository)
+    return repository

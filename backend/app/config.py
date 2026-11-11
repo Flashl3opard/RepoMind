@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     CLONE_WORKDIR: str | None = None  # defaults to the OS temp dir when unset
     SUPPORTED_EXTENSIONS: tuple[str, ...] = (".py", ".ts", ".tsx")
 
+    # Chat models for the Q&A agent (app/agents/qa.py), passed to
+    # `langchain.chat_models.init_chat_model` as "<provider>:<model>".
+    CHAT_PROVIDER: str = "openai"
+    CHAT_MODEL: str = "gpt-4o-mini"
+    VERIFY_MODEL: str = "gpt-4o-mini"
+
+    QA_DEFAULT_TOP_K: int = 8
+    QA_MAX_EXPANDED_CHUNKS: int = 6
+    QA_MAX_ATTEMPTS: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:
