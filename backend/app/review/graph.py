@@ -17,7 +17,11 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Chunk, File, Repository
 from app.parsing.registry import get_parser_for_path
-from app.review.context_retrieval import estimate_tokens, gather_review_context
+from app.review.context_retrieval import (
+    build_diff_only_context,
+    estimate_tokens,
+    gather_review_context,
+)
 from app.review.diff_parser import old_side_ranges_by_file, parse_diff
 from app.review.github import fetch_pr_diff
 from app.review.impact import ImpactResult, analyze_impact
@@ -80,6 +84,7 @@ def build_review_graph(
     max_context_tokens: int,
     max_findings_per_file: int,
     retrieval_top_k: int,
+    context_mode: str = "full",
 ) -> Any:
     def parse_diff_node(state: ReviewState) -> dict:
         file_diffs = parse_diff(state["diff_text"])
@@ -97,6 +102,8 @@ def build_review_graph(
         return {"changed_symbols": changed_symbols}
 
     def impact_node(state: ReviewState) -> dict:
+        if context_mode == "diff_only":
+            return {"impacts": []}
         old_ranges = old_side_ranges_by_file(state["file_diffs"])
         impacts: list[ImpactResult] = []
         for symbol in state["changed_symbols"]:
@@ -106,6 +113,8 @@ def build_review_graph(
         return {"impacts": impacts}
 
     def retrieve_node(state: ReviewState) -> dict:
+        if context_mode == "diff_only":
+            return {"context": build_diff_only_context(state["changed_symbols"])}
         context = gather_review_context(
             db,
             repo_id,
@@ -171,6 +180,7 @@ class ReviewResult:
     files_reviewed: int
     changed_symbols_debug: list[dict]
     context_debug: list[dict]
+    context: list[dict]  # full labeled context (incl. start/end line), for poster.py evidence formatting
 
 
 def run_review(
@@ -187,6 +197,7 @@ def run_review(
     max_context_tokens: int = 6_000,
     max_findings_per_file: int = 5,
     retrieval_top_k: int = 6,
+    context_mode: str = "full",
 ) -> ReviewResult:
     diff_bytes = len(diff_text.encode("utf-8"))
     if diff_bytes > max_diff_bytes:
@@ -206,6 +217,7 @@ def run_review(
         max_context_tokens=max_context_tokens,
         max_findings_per_file=max_findings_per_file,
         retrieval_top_k=retrieval_top_k,
+        context_mode=context_mode,
     )
     initial_state: ReviewState = {
         "diff_text": diff_text,
@@ -244,4 +256,5 @@ def run_review(
             {"label": c["label"], "file_path": c["file_path"], "reason": c["reason"], "sources": c["sources"]}
             for c in final_state["context"]
         ],
+        context=[dict(c) for c in final_state["context"]],
     )

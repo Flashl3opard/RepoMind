@@ -24,6 +24,11 @@ uv.lock.tmp
 frontend/node_modules/
 frontend/dist/
 
+# Generated benchmark artifacts (backend/evals/bench/) -- regenerate with generate.py/run.py
+backend/evals/bench/cases/
+backend/evals/bench/results/
+backend/evals/bench/llm_cache/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -231,7 +231,11 @@ def diff_signatures(old: SignatureInfo, new: SignatureInfo) -> list[str]:
 
     if len(new.params) > len(old.params):
         for extra in new.params[len(old.params) :]:
-            changes.append(f"new parameter '{extra.name}' added")
+            # Whether the new parameter is required matters a lot for judging
+            # whether this is actually a breaking change -- say so explicitly rather
+            # than making the reader infer it from the raw source.
+            requiredness = "optional, has a default" if extra.has_default else "required, no default"
+            changes.append(f"new parameter '{extra.name}' added ({requiredness})")
     elif len(old.params) > len(new.params):
         for extra in old.params[len(new.params) :]:
             changes.append(f"parameter '{extra.name}' removed")

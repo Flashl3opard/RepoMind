@@ -94,3 +94,31 @@ def gather_review_context(
         try_add(retrieved.chunk, "retrieved", list(retrieved.sources), retrieved.score)
 
     return labeled
+
+
+def build_diff_only_context(changed_symbols: list[ChangedSymbol]) -> list[LabeledChunkState]:
+    """The "diff_only" ablation mode: no impact analysis, no graph expansion, no
+    hybrid retrieval -- just the changed symbols' own (new) text, labeled the same way
+    so citation handling and verify's evidence-validity rule still work unchanged.
+    The breaking_change verify gate requires caller evidence, which never appears
+    here, so breaking_change findings are structurally unavailable in this mode --
+    that's the point of the ablation, not a bug. Pure function; no DB, no network."""
+    context: list[LabeledChunkState] = []
+    for i, symbol in enumerate(changed_symbols, start=1):
+        start = symbol.new_start_line if symbol.new_start_line is not None else (symbol.old_start_line or 0)
+        end = symbol.new_end_line if symbol.new_end_line is not None else (symbol.old_end_line or 0)
+        context.append(
+            LabeledChunkState(
+                label=f"C{i}",
+                chunk_id=str(symbol.indexed_chunk_id) if symbol.indexed_chunk_id is not None else "",
+                file_path=symbol.file_path,
+                symbol_name=symbol.symbol_name,
+                start_line=start,
+                end_line=end,
+                source=symbol.new_source or "(no new source available, e.g. a removed symbol)",
+                reason=f"changed:{symbol.change_type}",
+                sources=["diff"],
+                score=1.0,
+            )
+        )
+    return context

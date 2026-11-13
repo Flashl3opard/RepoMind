@@ -68,6 +68,15 @@ def test_diff_signatures_param_count_changed():
     assert any("new parameter 'c' added" in c for c in changes)
 
 
+def test_diff_signatures_notes_whether_new_param_is_required_or_optional():
+    old = extract_signatures("def f(a, b):\n    pass\n", "python")["f"]
+    required = extract_signatures("def f(a, b, c):\n    pass\n", "python")["f"]
+    optional = extract_signatures("def f(a, b, c=None):\n    pass\n", "python")["f"]
+
+    assert any("required, no default" in c for c in diff_signatures(old, required))
+    assert any("optional, has a default" in c for c in diff_signatures(old, optional))
+
+
 def test_diff_signatures_param_renamed():
     old = extract_signatures("def f(a, b):\n    pass\n", "python")["f"]
     new = extract_signatures("def f(a, x):\n    pass\n", "python")["f"]

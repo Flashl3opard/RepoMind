@@ -42,6 +42,14 @@ class EdgeType(enum.StrEnum):
     CALLS = "calls"
 
 
+class ReviewRunStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 def _uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -145,3 +153,34 @@ class SymbolEdge(Base):
     )
 
     source_chunk: Mapped[Chunk] = relationship(back_populates="outgoing_edges")
+
+
+class ReviewRun(Base):
+    """One attempt at reviewing a PR at a specific head commit, driven by the GitHub
+    App webhook. The unique constraint is what makes duplicate webhook deliveries for
+    the same (repo, PR, head_sha) a no-op instead of a duplicate review."""
+
+    __tablename__ = "review_runs"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "pr_number", "head_sha", name="uq_review_run_repo_pr_sha"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[ReviewRunStatus] = mapped_column(
+        Enum(ReviewRunStatus, name="review_run_status"), nullable=False, default=ReviewRunStatus.QUEUED
+    )
+    finding_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    repository: Mapped[Repository] = relationship()

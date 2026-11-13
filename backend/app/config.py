@@ -55,6 +55,25 @@ class Settings(BaseSettings):
     # is enabled -- off by default so internal pipeline state isn't exposed publicly.
     REVIEW_DEBUG_ENABLED: bool = False
 
+    # "full": impact analysis + graph expansion + hybrid retrieval, as above.
+    # "diff_only": the reviewer sees only the diff and the changed symbols -- no
+    # callers/callees/tests, no retrieval. Used for the context-mode ablation
+    # (evals/bench/); breaking_change findings become structurally unavailable in this
+    # mode, since the verify gate requires real caller evidence.
+    REVIEW_CONTEXT_MODE: str = "full"
+
+    # GitHub App (app/github_app/)
+    GITHUB_APP_ID: str | None = None
+    GITHUB_APP_PRIVATE_KEY: str | None = None  # PEM contents, or a path to a PEM file
+    GITHUB_WEBHOOK_SECRET: str | None = None
+    GITHUB_REVIEW_FORKS: bool = False
+    GITHUB_MAX_INLINE_COMMENTS: int = 10
+    GITHUB_RATE_LIMIT_CAPACITY: int = 5
+    GITHUB_RATE_LIMIT_REFILL_PER_MINUTE: float = 5.0
+    # Runs the whole pipeline and logs the would-be review instead of posting it.
+    # Defaults to true: posting to a real PR is a one-way, visible action.
+    REVIEW_DRY_RUN: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
