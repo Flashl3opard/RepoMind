@@ -1,8 +1,10 @@
 # RepoMind
 
 A monorepo for ingesting public git repositories, parsing their source with Tree-sitter,
-embedding code chunks, and answering natural-language questions about a codebase with
-exact file/line citations via a hybrid-retrieval + graph-expansion LangGraph agent.
+embedding code chunks, answering natural-language questions about a codebase with
+exact file/line citations via a hybrid-retrieval + graph-expansion LangGraph agent, and
+reviewing pull requests cross-file (either on demand or automatically via a GitHub App
+webhook) with findings backed by real caller/callee/test evidence.
 
 ## Structure
 
