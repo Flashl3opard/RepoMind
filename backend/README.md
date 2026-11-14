@@ -21,6 +21,12 @@ ever writing anything from the PR back into the database.
 
 ## Setup
 
+For the whole stack (db + backend + frontend) in one command, see the root
+[README's Quickstart](../README.md#quickstart-one-command) (`docker compose up
+--build`, then optionally `uv run python scripts/seed_demo.py` to populate it with a
+sample ingested repo, Q&A, and review). The rest of this section is for running the
+backend directly against a local Python/uv install instead.
+
 ```bash
 cd backend
 uv sync                       # creates .venv and installs deps (+ dev group)
@@ -123,7 +129,12 @@ and how many generate/verify attempts the agent needed.
 | `GITHUB_RATE_LIMIT_CAPACITY` | token-bucket capacity per installation (default 5) |
 | `GITHUB_RATE_LIMIT_REFILL_PER_MINUTE` | token-bucket refill rate per installation (default 5.0) |
 | `REVIEW_DRY_RUN`       | logs the would-be review instead of posting it (default `true` -- see below) |
-| `DASHBOARD_API_KEY`    | bearer token required on every route except `/webhooks/github` and `/health`; if unset, only localhost requests are allowed (dev only) -- see [Dashboard API](#dashboard-api) below |
+| `DASHBOARD_API_KEY`    | bearer token required on every route except `/webhooks/github` and `/health`; if unset, those routes return `503` -- see [Dashboard API](#dashboard-api) below |
+| `DASHBOARD_AUTH_DISABLED` | local-dev-only opt-out that disables auth entirely; startup refuses it unless `REVIEW_DRY_RUN=true` and `GITHUB_WEBHOOK_SECRET` is unset (default `false`) |
+| `LANGCHAIN_TRACING_V2` | enables LangSmith tracing for the Q&A/review LangGraph agents (default `false`) -- see [Observability](#observability) below |
+| `LANGCHAIN_API_KEY` | required if `LANGCHAIN_TRACING_V2=true` |
+| `LANGCHAIN_PROJECT` | LangSmith project name traces are grouped under (default `repomind`) |
+| `LANGCHAIN_ENDPOINT` | LangSmith API endpoint override, e.g. for a self-hosted instance (optional) |
 | `CORS_ALLOWED_ORIGINS` | comma-separated origins allowed via CORS (default: none, since the dashboard frontend calls this API server-side) |
 
 The `chunks.embedding` pgvector column has a fixed dimension (`Settings.EMBEDDING_DIM`,
@@ -228,10 +239,19 @@ end (the PR's own content is never written to the database):
    comment or commit message that says "ignore previous instructions" is just text to
    review, not something the model should act on.
 6. **verify** — deterministic only, the LLM is never trusted here: drops findings
-   outside a changed hunk, drops findings citing a `[Cn]` label that doesn't exist,
-   requires a `breaking_change` finding to land on a symbol the signature/removal
-   detector actually flagged *and* cite real caller evidence, dedupes near-identical
-   findings, and caps findings per file.
+   outside a changed hunk, drops findings citing a `[Cn]` label that doesn't exist.
+   A `breaking_change` finding must attribute unambiguously to one changed symbol
+   (the *smallest* changed symbol whose range overlaps the finding -- if two
+   adjacent symbols, e.g. two one-line functions, tie for smallest, the finding is
+   left unattributed rather than guessing) that the signature/removal detector
+   actually flagged, *and* cite real caller evidence. A `contract_change` finding
+   (a behavioral change where the *declared* signature is unchanged -- no
+   signature-diff signal to gate on) instead requires the model to cite a real
+   caller **and** a short verbatim `caller_usage` quote that actually appears in
+   that caller's own source text (whitespace-normalized); its severity is capped at
+   `warning` since there's no signature diff backing it, only the LLM's own
+   read plus a verified quote. Both gates, plus evidence-label and hunk-bounds
+   checks, dedupe near-identical findings, and cap findings per file.
 7. **summarize** — risk level (`low`/`medium`/`high`) and the summary text are both
    computed in code from the verified findings, not asked from the LLM.
 
@@ -262,12 +282,53 @@ in `/repos/{id}/reviews` alongside webhook-triggered ones; webhook idempotency
 
 Every route except `/webhooks/github` (which has its own HMAC signature check) and
 `/health` requires `Authorization: Bearer <DASHBOARD_API_KEY>`, checked with
-`hmac.compare_digest` (`app/api/dashboard_auth.py`, applied as a Starlette
-middleware ahead of routing). If `DASHBOARD_API_KEY` isn't set, the middleware instead
-only allows requests whose client host is `127.0.0.1`/`::1`/`localhost` and a warning
-is logged once at startup -- meant strictly for local dev, not anything reachable from
-the internet. CORS is opt-in via `CORS_ALLOWED_ORIGINS` and off by default, since the
-dashboard calls this API server-side (its own API key never reaches a browser).
+`hmac.compare_digest` (`app/api/dashboard_auth.py`, applied as a Starlette middleware
+ahead of routing). This fails closed: if `DASHBOARD_API_KEY` isn't set, those routes
+return `503` rather than falling back to any "trust the network" check -- an earlier
+version of this allowed localhost-only requests when the key was unset, which is
+unsafe behind any reverse proxy or tunnel, where every request's observed client
+address is the proxy's own rather than the real caller's. A loud warning is logged
+once at startup either way.
+
+For local development without setting up a key, set `DASHBOARD_AUTH_DISABLED=true`
+explicitly. Startup refuses to proceed with it set unless `REVIEW_DRY_RUN=true` *and*
+`GITHUB_WEBHOOK_SECRET` is unset -- otherwise there'd be nothing gating the blast
+radius of a review actually posting, or a live webhook being processed, while every
+route is open to anyone who can reach the process.
+
+CORS is opt-in via `CORS_ALLOWED_ORIGINS` and off by default, since the dashboard
+calls this API server-side (its own API key never reaches a browser).
+
+## Observability
+
+`app/observability.py`, wired into `app/main.py`:
+
+- **Structured JSON logging.** `configure_logging()` replaces the root logger's
+  handlers at startup so every `logging.getLogger(...)` call in the app (and the
+  libraries it uses) emits one JSON object per line on stdout, instead of default
+  plain-text formatting -- easy to pipe into any log aggregator without a separate
+  parser.
+- **Request id correlation.** `RequestIdMiddleware` (registered outermost, so even a
+  401/503 from the auth middleware still gets one) assigns each request an id --
+  reused from an inbound `X-Request-ID` header if present, otherwise a fresh one --
+  echoes it back in the response header, and logs one `request completed` line per
+  request with method/path/status/duration. Every other log line emitted during that
+  request picks up the same id automatically (via a contextvar), so grepping one
+  request id out of the log stream gets you everything that happened for it.
+- **Per-review log line.** `log_review_run()` emits exactly one structured line per
+  PR review (webhook or manual), with `repo`, `pr_number`, `mode`
+  (`REVIEW_CONTEXT_MODE`), `latency_seconds`, `finding_count`, `estimated_tokens`
+  (the same chars/4 heuristic used elsewhere), and `status`. **Never** the diff text,
+  a finding's message/evidence, or any token/API key -- those never reach this
+  function as arguments in the first place, not just "logged elsewhere redacted."
+- **Optional LangSmith tracing**, off by default. Set `LANGCHAIN_TRACING_V2=true` (+
+  `LANGCHAIN_API_KEY`, optionally `LANGCHAIN_PROJECT`/`LANGCHAIN_ENDPOINT`) in
+  `backend/.env` to trace every LangGraph run (Q&A and PR review) in LangSmith.
+  `configure_langsmith_tracing()` exports these into the actual process environment
+  at startup (pydantic-settings loading `.env` does not itself do this -- the
+  `langsmith` SDK reads `os.environ` directly, not this app's `Settings`), so setting
+  them in `.env` is enough; nothing else in the app needs to change for this to work,
+  since LangGraph's own tracing integration already respects these standard vars.
 
 ## GitHub App integration & benchmark
 
@@ -335,18 +396,33 @@ since posting to a real PR is a one-way, visible action.
 ### The context-mode ablation
 
 `REVIEW_CONTEXT_MODE` (or the `context_mode` parameter to `run_review()` directly, for
-evals) switches between:
+evals) switches between three modes:
 
 - **`full`** (default): impact analysis, one-hop graph expansion, and hybrid retrieval
   all run, as described in "How the PR reviewer works" above.
 - **`diff_only`**: none of that runs. The reviewer sees only the diff and the changed
-  symbols themselves (`app/review/context_retrieval.py:build_diff_only_context`) -- no
-  callers, callees, or tests surfaced from the index.
+  symbols themselves (`build_diff_only_context`) -- no callers, callees, or tests
+  surfaced from the index.
+- **`naive`**: simulates a per-file reviewer. No impact analysis, no retrieval -- the
+  reviewer sees the diff plus each changed file's full new content when available
+  (`build_naive_context`; falls back to the diff's own visible new-side text for a
+  file whose full content couldn't be sourced, e.g. a bare-diff review with no repo
+  checkout to read from).
 
-**The breaking_change verify gate requires real caller evidence in the shown context.**
-`diff_only` mode never surfaces any, so breaking_change findings are structurally
-unavailable in that mode -- that's the entire point of the ablation (it isolates how
-much cross-file context actually buys you), not a bug to fix.
+**`diff_only` is a structural lower bound, not a fair baseline.** The breaking_change
+and contract_change verify gates both require real caller evidence, which `diff_only`'s
+context never contains -- those categories are *impossible* in that mode regardless of
+how good the underlying model is. That's the point of including it (it isolates how
+much cross-file context buys you at all), but comparing a weaker model's `full`-mode
+score against `diff_only` and calling the gap "the value of retrieval" overstates it,
+since part of that gap is a hard gate, not model skill.
+
+**`naive` is the fair baseline.** It gets none of this project's retrieval/graph
+machinery, but isn't structurally gated to find nothing either: `verify_findings` runs
+with `strict_gates=False` for this mode (only hunk-bounds validity, dedup, and the
+per-file cap apply -- no evidence-label or caller-evidence checks), since there's no
+caller evidence to cite in a per-file context by construction. This is what "the value
+of this project's retrieval and graph machinery" should actually be measured against.
 
 ### Running the benchmark
 
@@ -355,7 +431,8 @@ much cross-file context actually buys you), not a bug to fix.
 uv run python -m evals.bench.generate --repo /path/to/some/python/repo --seed 0 --max-cases 20
 # writes evals/bench/cases/<repo-name>/<case_id>/{pr.diff, expected.yaml}
 
-# 2. run both context modes against every generated case
+# 2. run all three context modes against every generated case (plus any real-PR
+#    holdout cases in evals/bench/cases/real/ -- see that directory's README.md)
 uv run python -m evals.bench.run --repo /path/to/some/python/repo --cases-dir evals/bench/cases/<repo-name>
 # writes evals/bench/results/<timestamp>.json and evals/bench/results/latest.md
 ```
@@ -367,16 +444,34 @@ touching the source repo -- it works on a temp copy): `add_required_param`,
 `remove_function`, `rename_function`, and `change_return_shape` as positive
 (should-be-flagged) cases, plus `add_optional_param`, `add_docstring`, and
 `rename_local_variable` as negative (should-NOT-be-flagged) cases. Deterministic given
-`--seed`.
+`--seed`. `change_return_shape` is a known gap for the breaking_change gate specifically
+(see "Known limitations" below) -- it's the case `contract_change` exists for.
 
-`run.py` ingests the (real) repo once, then runs `run_review()` against every case in
-both context modes, caching each LLM response on disk keyed by
-`(case_id, mode, model, hash(prompt))` so a rerun after a code change that didn't touch
-prompts or models is free. It reports, per mode and broken down by `mutation_type`:
-recall on positive cases (a finding landed on the changed symbol and cited at least one
-expected caller file), false-positive rate on negative cases (a `breaking_change`
-finding fired when it shouldn't have), evidence-validity rate, average latency, and a
-rough estimated-token cost (a chars/4 heuristic, not a real tokenizer).
+`run.py` ingests the (real) repo once, then runs `run_review()` against every case
+(synthetic + real-holdout) in all three context modes, caching each LLM response on disk
+keyed by `(case_id, mode, model, hash(prompt))` so a rerun after a code change that
+didn't touch prompts or models is free. For `naive` mode specifically, it reads each
+case's changed file's current full content directly from the local `--repo` checkout
+(the one place this benchmark can give "naive" genuine full-file semantics; the live
+service has no equivalent for a real PR review and falls back to diff-visible text
+only -- a known gap, see below). It reports, per mode and broken down by
+`mutation_type` (a `real` row is the real-PR holdout group, if present):
+
+- **recall** on positive cases -- a `change_return_shape` case counts as a hit via a
+  `contract_change` OR `breaking_change` finding; every other positive mutation type is
+  scored the same way (either category counts), since a capable model might reasonably
+  label a given case either way.
+- **false-positive rate** on negative cases -- a `breaking_change` or `contract_change`
+  finding landed on the changed file when it shouldn't have.
+- **average findings per negative case** -- a coarser noise signal than the FP rate
+  alone (a mode could have a low FP rate but still bury negative cases in unrelated
+  findings).
+- **evidence-validity rate**, **average latency**, and a rough **estimated-token cost**
+  (a chars/4 heuristic, not a real tokenizer).
+
+See `evals/bench/cases/real/README.md` for how to add a hand-curated real-PR case --
+do not fabricate one; it's meant to catch whatever the synthetic mutations' narrow
+candidate selection might be missing, which only works if every case there is genuine.
 
 ## Eval seed
 
@@ -412,6 +507,19 @@ uv run pytest
 uv run ruff check .
 ```
 
+Without a reachable Postgres+pgvector (`docker compose up -d db`), every DB-backed test
+skips cleanly rather than failing. CI (`.github/workflows/ci.yml`) runs against a real
+`pgvector/pgvector:pg16` service container, so those tests actually execute there; a
+skipped-test count over a small threshold fails the CI job (`backend/scripts/
+check_test_summary.py`) specifically to catch the service container silently not being
+reached, rather than tests quietly skipping without anyone noticing. No real LLM/API
+keys are used in CI -- every test that needs a model or embeddings uses the fakes in
+`tests/fakes.py`.
+
+- `tests/test_cloner.py` — `git clone` with an installation token: the token never
+  appears in the URL argv, `.git/config` of the cloned repo, or a failed clone's
+  exception text (a fake git runner for the argv checks, a real local clone for the
+  `.git/config` check).
 - `tests/test_parser_python.py`, `tests/test_parser_typescript.py` — pure unit tests
   against small fixture files in `tests/fixtures/`, no DB or network needed.
 - `tests/test_rrf.py`, `tests/test_keyword_identifiers.py`, `tests/test_graph_resolution.py`,
@@ -477,9 +585,10 @@ uv run ruff check .
 app/
   config.py            pydantic-settings config
   main.py               FastAPI app, startup embedding-dimension check
+  observability.py       JSON logging, request-id middleware, per-review log line, LangSmith opt-in
   api/                  routes + request/response schemas
     dashboard.py           read-only endpoints for the frontend dashboard
-    dashboard_auth.py        bearer-token middleware (localhost fallback if unset)
+    dashboard_auth.py        bearer-token middleware, fails closed (503) if unset
   db/                    SQLAlchemy models, session, declarative base, startup checks
   parsing/               Tree-sitter based chunk extraction (Python, TypeScript)
   retrieval/
@@ -517,6 +626,11 @@ app/
     embeddings.py        LangChain embeddings factory, dimension-pinned, + batching
     ingestion.py          clone -> parse -> embed -> persist orchestrator
 alembic/                 migrations
+scripts/
+  seed_demo.py            demo content for a fresh stack (ingest + ask + review), see root README
+  demo_review.diff          sample diff seed_demo.py reviews (a deliberate eval()-based security smell)
+  check_test_summary.py     parses pytest output for CI's skipped-test budget (.github/workflows/ci.yml)
+Dockerfile                migrations-on-start backend image (see root docker-compose.yml)
 evals/
   fixture_repo.py          shared synthetic repo for both eval scripts
   qa_questions.yaml + run_qa_eval.py            Q&A eval seed
@@ -527,6 +641,7 @@ evals/
     llm_cache.py                disk-backed cache keyed by (case_id, mode, model, prompt hash)
     run.py                       runs both context modes per case, aggregates, writes results (CLI)
     cases/<repo>/<case_id>/{pr.diff, expected.yaml}   generated benchmark cases (gitignored)
+    cases/real/<case_id>/{pr.diff, expected.yaml}       hand-curated real-PR holdout (committed, not gitignored)
     results/<timestamp>.json, results/latest.md        benchmark output (gitignored)
 tests/
 ```
@@ -599,15 +714,17 @@ tests/
     status -- there's no separate retry/backoff scheduler, and if the first ingestion
     fails outright, the second just proceeds to ingest itself (which is safe, just not
     the cheapest approach for repeated failures).
-  - Cloning a private repo's URL with `git clone` isn't authenticated with the
-    installation token anywhere in this version -- `app/services/cloner.py` does a
-    plain anonymous clone. Public repos work out of the box; private-repo support
-    needs the installation token folded into the clone URL (or an askpass helper)
-    before `ingest_repository` is called.
-  - Dedup against existing comments matches on `(path, line, normalized message hash)`
-    regardless of comment author, not specifically "posted by this app" -- simpler, and
-    in practice the app is the only poster, but it means a human leaving an
-    identically-worded review comment would also suppress a repost.
+  - ~~Cloning a private repo's URL with `git clone` isn't authenticated~~ -- fixed:
+    `app/services/cloner.py` accepts an optional installation token, passed via a
+    one-off `git -c http.extraheader=...` override so it never ends up in the remote
+    URL, `.git/config`, logs, or exception text. Webhook-triggered ingestion
+    (PR review and default-branch re-ingestion) both pass the installation token
+    through automatically when the webhook came from a GitHub App installation.
+  - ~~Dedup against existing comments matches regardless of comment author~~ -- fixed:
+    `app/github_app/auth.py::AppIdentityProvider` resolves and caches the app's own
+    bot login (`"<slug>[bot]"`) via `GET /app`, and `poster.existing_comment_keys`
+    only considers comments from that login with `user.type == "Bot"`. A human
+    leaving an identically-worded review comment no longer suppresses a repost.
   - The 403/429-with-`Retry-After` handling retries the *entire* `post_review` call
     once (re-fetching existing comments, rebuilding the payload) rather than just the
     raw HTTP request -- simpler, and correctly re-applies dedup if something changed
@@ -633,13 +750,23 @@ tests/
     checks every generated mutation is still valid Python, but the mutator coverage is
     intentionally narrow rather than general.
   - `change_return_shape` mutations are a known gap in the deterministic
-    breaking_change gate: they change runtime behavior but not the *declared*
-    signature (no type annotations are added/removed), so
-    `ChangedSymbol.signature_changed` stays `False` and the gate can never let a
-    breaking_change finding through for this mutation type in either context mode. A
-    capable LLM may still catch it as `bug_risk` from the source text, which is why the
-    benchmark's recall metric checks for *any* finding on the right symbol citing an
-    expected caller, not specifically `category == "breaking_change"`.
+    breaking_change gate specifically: they change runtime behavior but not the
+    *declared* signature (no type annotations are added/removed), so
+    `ChangedSymbol.signature_changed` stays `False` and that gate can never let a
+    breaking_change finding through for this mutation type. `contract_change` exists
+    to cover exactly this gap (a caller-cited, verbatim-quoted behavioral change where
+    the signature is unchanged) -- but it still depends on the model noticing the
+    change and quoting real caller usage; it's a path to recall, not a guarantee of it.
+  - `naive` mode's "full new content of changed files" is genuinely available only in
+    the benchmark (`run.py` reads it off the local `--repo` checkout). The live
+    service (webhook or manual review) has no persistent repo checkout at review time
+    -- `ingest_repository` deletes its clone right after indexing -- so
+    `REVIEW_CONTEXT_MODE=naive` against a real PR falls back to the diff's own
+    visible new-side text per file instead of the true full file. That's still a
+    meaningfully different (per-file, not per-symbol) context shape than `diff_only`,
+    but it's a weaker "naive" than the one the benchmark measures. Fetching full file
+    content from GitHub for live naive-mode reviews is a reasonable follow-up, not
+    implemented in this version.
   - The "rough estimated token cost" is the same chars/4 heuristic used for the
     `REVIEW_MAX_*_TOKENS` caps, applied to the retrieved/impact context only (not the
     full rendered prompt or the model's output) -- a relative, cross-mode comparison

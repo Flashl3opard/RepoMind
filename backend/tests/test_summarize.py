@@ -5,7 +5,7 @@ from app.review.summarize import compute_risk_level, summarize_findings
 def make_finding(file="a.py", severity="info", category="style") -> VerifiedFinding:
     return VerifiedFinding(
         file=file, start_line=1, end_line=1, severity=severity, category=category,
-        message="msg", evidence=["C1"],
+        message="msg", evidence=["C1"], caller_usage=None,
     )
 
 

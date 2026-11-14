@@ -30,7 +30,7 @@ diff --git a/calculator.py b/calculator.py
 def make_finding(file="calculator.py", start=1, end=2, severity="error", category="breaking_change", message="msg", evidence=None) -> VerifiedFinding:
     return VerifiedFinding(
         file=file, start_line=start, end_line=end, severity=severity, category=category,
-        message=message, evidence=["C1"] if evidence is None else evidence,
+        message=message, evidence=["C1"] if evidence is None else evidence, caller_usage=None,
     )
 
 
@@ -108,16 +108,46 @@ def test_select_inline_and_overflow_empty_overflow_when_under_cap():
 # -- existing_comment_keys / is_duplicate ----------------------------------------------
 
 
+BOT_LOGIN = "repomind-bot[bot]"
+
+
+def bot_comment(path, line, body) -> dict:
+    return {"path": path, "line": line, "body": body, "user": {"login": BOT_LOGIN, "type": "Bot"}}
+
+
+def human_comment(path, line, body, login="a-human") -> dict:
+    return {"path": path, "line": line, "body": body, "user": {"login": login, "type": "User"}}
+
+
 def test_existing_comment_keys_extracts_path_line_and_message_hash():
-    raw = [{"path": "a.py", "line": 5, "body": "Some message"}]
-    keys = existing_comment_keys(raw)
+    raw = [bot_comment("a.py", 5, "Some message")]
+    keys = existing_comment_keys(raw, BOT_LOGIN)
     assert (("a.py", 5, normalize_message("Some message"))) in keys
 
 
 def test_existing_comment_keys_falls_back_to_original_line():
-    raw = [{"path": "a.py", "original_line": 7, "body": "msg"}]
-    keys = existing_comment_keys(raw)
+    raw = [{"path": "a.py", "original_line": 7, "body": "msg", "user": {"login": BOT_LOGIN, "type": "Bot"}}]
+    keys = existing_comment_keys(raw, BOT_LOGIN)
     assert ("a.py", 7, normalize_message("msg")) in keys
+
+
+def test_existing_comment_keys_ignores_comments_from_other_users():
+    raw = [human_comment("a.py", 5, "Some message")]
+    keys = existing_comment_keys(raw, BOT_LOGIN)
+    assert keys == set()
+
+
+def test_existing_comment_keys_ignores_same_login_if_not_type_bot():
+    # a human account could theoretically share the login string; type must also match
+    raw = [{"path": "a.py", "line": 5, "body": "msg", "user": {"login": BOT_LOGIN, "type": "User"}}]
+    keys = existing_comment_keys(raw, BOT_LOGIN)
+    assert keys == set()
+
+
+def test_existing_comment_keys_ignores_comments_with_no_user_field():
+    raw = [{"path": "a.py", "line": 5, "body": "msg"}]
+    keys = existing_comment_keys(raw, BOT_LOGIN)
+    assert keys == set()
 
 
 def test_is_duplicate_true_when_key_matches():
@@ -278,11 +308,41 @@ def test_post_review_retries_once_on_422_folding_comments_into_body():
 def test_post_review_does_not_repeat_comment_already_posted():
     finding = make_finding(start=1, end=2, message="already posted")
     result = make_result(findings=[finding])
-    existing = [{"path": "calculator.py", "line": 1, "body": "already posted"}]
+    existing = [bot_comment("calculator.py", 1, "already posted")]
     client = FakeClient(existing_comments=existing)
 
-    outcome = post_review(client, "owner", "repo", 1, "sha123", result, SIMPLE_DIFF, max_inline=10, dry_run=False)
+    outcome = post_review(
+        client, "owner", "repo", 1, "sha123", result, SIMPLE_DIFF, max_inline=10, dry_run=False, bot_login=BOT_LOGIN
+    )
 
     assert outcome.posted is True
     assert outcome.skipped_as_duplicate == 1
     assert client.create_review_calls[0]["comments"] == []
+
+
+def test_post_review_a_human_comment_with_identical_text_does_not_suppress_ours():
+    finding = make_finding(start=1, end=2, message="already posted")
+    result = make_result(findings=[finding])
+    existing = [human_comment("calculator.py", 1, "already posted")]
+    client = FakeClient(existing_comments=existing)
+
+    outcome = post_review(
+        client, "owner", "repo", 1, "sha123", result, SIMPLE_DIFF, max_inline=10, dry_run=False, bot_login=BOT_LOGIN
+    )
+
+    assert outcome.skipped_as_duplicate == 0
+    assert len(client.create_review_calls[0]["comments"]) == 1
+
+
+def test_post_review_skips_dedup_entirely_when_bot_login_is_none():
+    finding = make_finding(start=1, end=2, message="already posted")
+    result = make_result(findings=[finding])
+    existing = [bot_comment("calculator.py", 1, "already posted")]
+    client = FakeClient(existing_comments=existing)
+
+    outcome = post_review(
+        client, "owner", "repo", 1, "sha123", result, SIMPLE_DIFF, max_inline=10, dry_run=False, bot_login=None
+    )
+
+    assert outcome.skipped_as_duplicate == 0
+    assert len(client.create_review_calls[0]["comments"]) == 1

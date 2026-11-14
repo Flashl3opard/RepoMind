@@ -41,9 +41,19 @@ def make_repo(db_session, status=RepositoryStatus.COMPLETED) -> Repository:
 
 
 def make_review_run(db_session, repo, **kwargs) -> ReviewRun:
+    # A full, valid finding shape -- not a shorthand -- since it round-trips through
+    # the strict FindingResponse model on the way out of GET /reviews/{run_id}; a
+    # partial dict here would only fail once this DB-backed test actually runs
+    # against Postgres, not when it's skipped for lacking one.
     defaults = dict(
         repository_id=repo.id, pr_number=1, head_sha="sha1", status=ReviewRunStatus.DONE,
-        finding_count=1, source="webhook", findings=[{"file": "a.py", "category": "bug_risk"}],
+        finding_count=1, source="webhook",
+        findings=[
+            {
+                "file": "a.py", "start_line": 1, "end_line": 2, "severity": "warning",
+                "category": "bug_risk", "message": "msg", "evidence": ["C1"], "caller_usage": None,
+            }
+        ],
         summary="1 finding", risk_level="medium",
     )
     defaults.update(kwargs)
@@ -70,6 +80,42 @@ def test_repos_endpoint_rejects_wrong_key(client):
 def test_health_does_not_require_auth(client):
     response = client.get("/health")
     assert response.status_code == 200
+
+
+def test_repos_endpoint_returns_503_when_key_unset(monkeypatch, db_session):
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    settings = get_settings()
+    monkeypatch.setattr(settings, "DASHBOARD_API_KEY", None)
+    monkeypatch.setattr(settings, "DASHBOARD_AUTH_DISABLED", False)
+
+    try:
+        test_client = TestClient(app)
+        response = test_client.get("/repos")
+        assert response.status_code == 503
+        # health and the webhook route stay reachable even with no key configured
+        assert test_client.get("/health").status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_repos_endpoint_bypasses_auth_when_disabled(monkeypatch, db_session):
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    settings = get_settings()
+    monkeypatch.setattr(settings, "DASHBOARD_API_KEY", None)
+    monkeypatch.setattr(settings, "DASHBOARD_AUTH_DISABLED", True)
+
+    try:
+        test_client = TestClient(app)
+        response = test_client.get("/repos")
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 # -- GET /repos -----------------------------------------------------------------------------
@@ -135,7 +181,12 @@ def test_get_review_run_returns_full_detail(client, db_session):
     body = response.json()
     assert body["summary"] == "1 finding"
     assert body["risk_level"] == "medium"
-    assert body["findings"] == [{"file": "a.py", "category": "bug_risk"}]
+    assert body["findings"] == [
+        {
+            "file": "a.py", "start_line": 1, "end_line": 2, "severity": "warning",
+            "category": "bug_risk", "message": "msg", "evidence": ["C1"], "caller_usage": None,
+        }
+    ]
     assert body["source"] == "webhook"
 
 

@@ -1,4 +1,9 @@
-from app.review.context_retrieval import build_diff_only_context, estimate_tokens
+from app.review.context_retrieval import (
+    build_diff_only_context,
+    build_naive_context,
+    estimate_tokens,
+)
+from app.review.diff_parser import DiffLine, FileDiff, Hunk
 from app.review.map_changes import ChangedSymbol
 
 
@@ -44,3 +49,48 @@ def test_diff_only_context_falls_back_to_old_lines_for_removed_symbol():
 
 def test_diff_only_context_empty_for_no_symbols():
     assert build_diff_only_context([]) == []
+
+
+def make_file_diff(path="calculator.py", is_binary=False, is_deleted=False, lines=None) -> FileDiff:
+    hunk = Hunk(old_start=1, old_lines=0, new_start=1, new_lines=0, section_header="")
+    for tag, text in lines or [("context", "def add(a, b):"), ("add", "    return a + b")]:
+        hunk.lines.append(DiffLine(tag, text, 1, 1))
+    return FileDiff(
+        old_path=path, new_path=None if is_deleted else path,
+        is_deleted=is_deleted, is_binary=is_binary, hunks=[hunk],
+    )
+
+
+# -- build_naive_context --------------------------------------------------------------
+
+
+def test_naive_context_uses_full_file_content_when_supplied():
+    file_diff = make_file_diff(path="calculator.py")
+    context = build_naive_context([file_diff], {"calculator.py": "def add(a, b):\n    return a + b\n"})
+    assert len(context) == 1
+    assert context[0]["source"] == "def add(a, b):\n    return a + b\n"
+    assert context[0]["file_path"] == "calculator.py"
+    assert context[0]["reason"] == "naive_file_context"
+    assert context[0]["sources"] == ["naive"]
+
+
+def test_naive_context_falls_back_to_diff_text_when_full_content_missing():
+    file_diff = make_file_diff(path="calculator.py")
+    context = build_naive_context([file_diff], {})
+    assert len(context) == 1
+    assert "return a + b" in context[0]["source"]
+
+
+def test_naive_context_labels_sequentially_per_file():
+    diffs = [make_file_diff(path="a.py"), make_file_diff(path="b.py")]
+    context = build_naive_context(diffs, {})
+    assert [c["label"] for c in context] == ["C1", "C2"]
+
+
+def test_naive_context_skips_binary_and_deleted_files():
+    diffs = [make_file_diff(path="image.png", is_binary=True), make_file_diff(path="removed.py", is_deleted=True)]
+    assert build_naive_context(diffs, {}) == []
+
+
+def test_naive_context_empty_for_no_diffs():
+    assert build_naive_context([], {}) == []

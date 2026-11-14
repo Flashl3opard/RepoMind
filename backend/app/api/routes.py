@@ -1,3 +1,4 @@
+import time
 import uuid
 from urllib.parse import urlparse
 
@@ -24,6 +25,8 @@ from app.api.schemas import (
 from app.config import get_settings
 from app.db.models import Chunk, File, Repository, RepositoryStatus, ReviewRun, ReviewRunStatus
 from app.db.session import SessionLocal, get_db
+from app.observability import log_review_run
+from app.review.context_retrieval import estimate_tokens
 from app.review.github import (
     GitHubError,
     GitHubRateLimitError,
@@ -188,6 +191,7 @@ def review_repository(
     except GitHubError as exc:
         raise HTTPException(status_code=502, detail=f"could not fetch PR diff: {exc}") from exc
 
+    review_started_at = time.perf_counter()
     try:
         result = run_review(
             db,
@@ -202,6 +206,7 @@ def review_repository(
             max_context_tokens=settings.REVIEW_MAX_CONTEXT_TOKENS,
             max_findings_per_file=settings.REVIEW_MAX_FINDINGS_PER_FILE,
             retrieval_top_k=settings.REVIEW_RETRIEVAL_TOP_K,
+            context_mode=settings.REVIEW_CONTEXT_MODE,
         )
     except ReviewInputError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -218,6 +223,17 @@ def review_repository(
             _, _, pr_number = parse_pr_url(payload.pr_url)
         except ValueError:
             pr_number = 0
+
+    log_review_run(
+        repo=repository.name,
+        pr_number=pr_number or None,
+        mode=settings.REVIEW_CONTEXT_MODE,
+        latency_seconds=time.perf_counter() - review_started_at,
+        finding_count=len(result.verified_findings),
+        estimated_tokens=sum(estimate_tokens(c["source"]) for c in result.context),
+        status="completed",
+    )
+
     review_run = ReviewRun(
         repository_id=repository.id,
         pr_number=pr_number,

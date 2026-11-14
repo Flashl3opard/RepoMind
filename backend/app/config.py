@@ -58,8 +58,15 @@ class Settings(BaseSettings):
     # "full": impact analysis + graph expansion + hybrid retrieval, as above.
     # "diff_only": the reviewer sees only the diff and the changed symbols -- no
     # callers/callees/tests, no retrieval. Used for the context-mode ablation
-    # (evals/bench/); breaking_change findings become structurally unavailable in this
-    # mode, since the verify gate requires real caller evidence.
+    # (evals/bench/); breaking_change/contract_change findings become structurally
+    # unavailable in this mode, since those verify gates require real caller evidence
+    # -- it's a structural lower bound, not a realistic baseline.
+    # "naive": simulates a per-file reviewer -- the diff plus each changed file's
+    # full new content (when available), no impact analysis, no retrieval, and the
+    # caller-evidence gates are skipped entirely (there's no caller evidence to cite
+    # in this mode by construction). This is the fair baseline for the ablation: what
+    # a reviewer gets with zero of this project's retrieval/graph machinery, not
+    # artificially gated to find nothing.
     REVIEW_CONTEXT_MODE: str = "full"
 
     # GitHub App (app/github_app/)
@@ -75,13 +82,27 @@ class Settings(BaseSettings):
     REVIEW_DRY_RUN: bool = True
 
     # Dashboard API (app/api/dashboard.py) + auth applied to every route except
-    # /webhooks/github and /health (see app/api/dashboard_auth.py). When unset, only
-    # requests from localhost are allowed and a warning is logged at startup -- meant
-    # for local dev, never for a publicly reachable deployment.
+    # /webhooks/github and /health (see app/api/dashboard_auth.py). Fails closed: if
+    # unset, protected routes return 503 rather than falling back to any
+    # network-position check (a reverse proxy/tunnel makes every request look like it
+    # came from localhost, so that was never a safe substitute for a real key).
     DASHBOARD_API_KEY: str | None = None
+    # Explicit, loud local-dev opt-out of dashboard auth entirely. Refused at startup
+    # (see app/api/dashboard_auth.py::validate_auth_config) unless REVIEW_DRY_RUN is
+    # true and GITHUB_WEBHOOK_SECRET is unset, since those are the two ways this
+    # process can take a real-world-visible action.
+    DASHBOARD_AUTH_DISABLED: bool = False
     # Comma-separated list of allowed CORS origins. Empty by default: the frontend
     # calls this API server-side, so no browser origin needs to be allowed at all.
     CORS_ALLOWED_ORIGINS: str = ""
+
+    # Optional LangSmith tracing (app/observability.py::configure_langsmith_tracing).
+    # Off by default -- standard LangChain/LangGraph env vars, exported into the
+    # actual process environment at startup only when this is true.
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str | None = None
+    LANGCHAIN_PROJECT: str = "repomind"
+    LANGCHAIN_ENDPOINT: str | None = None
 
 
 @lru_cache

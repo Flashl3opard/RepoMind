@@ -32,9 +32,14 @@ def ingest_repository(
     *,
     embeddings: Embeddings | None = None,
     settings: Settings | None = None,
+    access_token: str | None = None,
 ) -> IngestionResult:
     """Clone -> parse -> embed -> persist. Safe to call repeatedly for the same repo;
-    a commit that has already been fully ingested is a no-op."""
+    a commit that has already been fully ingested is a no-op.
+
+    `access_token` (e.g. a GitHub App installation token) authenticates the clone of
+    a private repo; see `app.services.cloner.clone_repository` for how it's kept out
+    of the URL/config/logs."""
     settings = settings or get_settings()
     repository = db.get(Repository, repository_id)
     if repository is None:
@@ -44,7 +49,7 @@ def ingest_repository(
     try:
         repository.status = RepositoryStatus.CLONING
         db.commit()
-        cloned = cloner.clone_repository(repository.url)
+        cloned = cloner.clone_repository(repository.url, access_token=access_token)
 
         existing_files = db.scalar(
             select(func.count())

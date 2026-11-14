@@ -19,6 +19,7 @@ from app.db.models import Chunk, File, Repository
 from app.parsing.registry import get_parser_for_path
 from app.review.context_retrieval import (
     build_diff_only_context,
+    build_naive_context,
     estimate_tokens,
     gather_review_context,
 )
@@ -85,6 +86,7 @@ def build_review_graph(
     max_findings_per_file: int,
     retrieval_top_k: int,
     context_mode: str = "full",
+    full_file_contents: dict[str, str] | None = None,
 ) -> Any:
     def parse_diff_node(state: ReviewState) -> dict:
         file_diffs = parse_diff(state["diff_text"])
@@ -102,7 +104,7 @@ def build_review_graph(
         return {"changed_symbols": changed_symbols}
 
     def impact_node(state: ReviewState) -> dict:
-        if context_mode == "diff_only":
+        if context_mode in ("diff_only", "naive"):
             return {"impacts": []}
         old_ranges = old_side_ranges_by_file(state["file_diffs"])
         impacts: list[ImpactResult] = []
@@ -115,6 +117,8 @@ def build_review_graph(
     def retrieve_node(state: ReviewState) -> dict:
         if context_mode == "diff_only":
             return {"context": build_diff_only_context(state["changed_symbols"])}
+        if context_mode == "naive":
+            return {"context": build_naive_context(state["file_diffs"], full_file_contents)}
         context = gather_review_context(
             db,
             repo_id,
@@ -140,6 +144,7 @@ def build_review_graph(
             state["changed_symbols"],
             state["file_diffs"],
             max_per_file=max_findings_per_file,
+            strict_gates=context_mode != "naive",
         )
         return {"verified_findings": verified, "dropped_count": dropped}
 
@@ -198,6 +203,7 @@ def run_review(
     max_findings_per_file: int = 5,
     retrieval_top_k: int = 6,
     context_mode: str = "full",
+    full_file_contents: dict[str, str] | None = None,
 ) -> ReviewResult:
     diff_bytes = len(diff_text.encode("utf-8"))
     if diff_bytes > max_diff_bytes:
@@ -218,6 +224,7 @@ def run_review(
         max_findings_per_file=max_findings_per_file,
         retrieval_top_k=retrieval_top_k,
         context_mode=context_mode,
+        full_file_contents=full_file_contents,
     )
     initial_state: ReviewState = {
         "diff_text": diff_text,

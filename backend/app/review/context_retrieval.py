@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.agents.schemas import LabeledChunkState
 from app.db.models import Chunk
 from app.retrieval.hybrid import hybrid_search, merge_retrieved
+from app.review.diff_parser import FileDiff
 from app.review.impact import ImpactResult
 from app.review.map_changes import ChangedSymbol
 from app.review.signature import extract_docstring
@@ -118,6 +119,62 @@ def build_diff_only_context(changed_symbols: list[ChangedSymbol]) -> list[Labele
                 source=symbol.new_source or "(no new source available, e.g. a removed symbol)",
                 reason=f"changed:{symbol.change_type}",
                 sources=["diff"],
+                score=1.0,
+            )
+        )
+    return context
+
+
+def _diff_new_side_text(file_diff: FileDiff) -> str:
+    """Best-effort stand-in for a file's full new content when the caller couldn't
+    supply it: every new/context line visible across all of this file's hunks,
+    concatenated. Strictly less complete than the real file (only the diff's own
+    context lines are visible), but still per-file rather than per-symbol."""
+    lines = []
+    for hunk in file_diff.hunks:
+        lines.extend(line.text for line in hunk.lines if line.tag != "remove")
+    return "\n".join(lines)
+
+
+def build_naive_context(
+    file_diffs: list[FileDiff], full_file_contents: dict[str, str] | None = None
+) -> list[LabeledChunkState]:
+    """The "naive" ablation mode: simulates a per-file reviewer. No impact analysis,
+    no graph expansion, no hybrid retrieval -- one chunk per changed file (not per
+    symbol, unlike diff_only), holding that file's full new content when
+    `full_file_contents` supplies it (keyed by the diff's new-side path), or falling
+    back to the diff's own visible new-side text for a file it doesn't have (e.g. a
+    bare-diff review with no repo checkout or GitHub access to fetch from).
+
+    No chunk here is ever tagged as a caller/callee (`reason` is always
+    "naive_file_context"), so verify_findings must be called with
+    `strict_gates=False` for this mode's findings -- the breaking_change and
+    contract_change gates both require caller evidence that structurally cannot
+    exist in this context, and gating on it anyway would make "naive" score zero on
+    those categories by construction rather than by the model's own (lack of)
+    rigor, which defeats its purpose as a baseline. Pure function; no DB, no network
+    -- the caller is responsible for sourcing `full_file_contents`.
+    """
+    full_file_contents = full_file_contents or {}
+    context: list[LabeledChunkState] = []
+    label_num = 0
+    for file_diff in file_diffs:
+        if file_diff.is_binary or file_diff.is_deleted:
+            continue
+        path = file_diff.path
+        content = full_file_contents.get(path) or _diff_new_side_text(file_diff)
+        label_num += 1
+        context.append(
+            LabeledChunkState(
+                label=f"C{label_num}",
+                chunk_id="",
+                file_path=path,
+                symbol_name="",
+                start_line=1,
+                end_line=max(1, content.count("\n") + 1),
+                source=content,
+                reason="naive_file_context",
+                sources=["naive"],
                 score=1.0,
             )
         )

@@ -26,9 +26,9 @@ pnpm dev                     # http://localhost:3000
 ```
 
 `DASHBOARD_API_KEY` must be set to the same value the backend's `DASHBOARD_API_KEY` env
-var uses (see `backend/README.md`'s "Dashboard API" section) -- if the backend doesn't
-have one set, it only accepts requests from localhost, which is fine for local dev with
-both running on the same machine.
+var uses (see `backend/README.md`'s "Dashboard API" section) -- the backend fails
+closed and returns `503` on every call if it doesn't have a key configured. For local
+development without a key, set `DASHBOARD_AUTH_DISABLED=true` on the backend instead.
 
 ## Env vars (see `.env.example`)
 

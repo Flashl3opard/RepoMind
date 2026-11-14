@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.env
+.env.*
+!.env.example
+evals/bench/cases
+evals/bench/results
+evals/bench/llm_cache

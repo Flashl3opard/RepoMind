@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The backend job's "fake" credentials: nothing in the test suite makes a real
+  # network call to an LLM or embeddings provider (DB-backed integration tests use
+  # the fakes in tests/fakes.py); these exist only so app.config.Settings has
+  # something non-empty to load, matching what the app itself expects configured.
+  OPENAI_API_KEY: ci-fake-key-not-real
+  DASHBOARD_API_KEY: ci-dashboard-key
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: repomind
+          POSTGRES_PASSWORD: repomind
+          POSTGRES_DB: repomind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U repomind -d repomind"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://repomind:repomind@localhost:5432/repomind
+      TEST_DATABASE_URL: postgresql+psycopg://repomind:repomind@localhost:5432/repomind
+      MAX_ALLOWED_SKIPPED_TESTS: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4.3.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Run tests
+        run: |
+          set +o pipefail
+          uv run pytest -q 2>&1 | tee pytest-output.txt
+          echo "${PIPESTATUS[0]}" > pytest-exit-code.txt
+
+      - name: Enforce skipped-test budget
+        run: uv run python scripts/check_test_summary.py pytest-output.txt "$(cat pytest-exit-code.txt)"
+
+  frontend:
+    name: Frontend (lint + typecheck + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4.1.0
+
+      - name: Install Node
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting (prettier)
+        run: pnpm format:check
+
+      - name: Lint (eslint)
+        run: pnpm lint
+
+      - name: Typecheck (tsc)
+        run: pnpm typecheck
+
+      - name: Test (vitest)
+        run: pnpm test
+
+      - name: Build (next build)
+        run: pnpm build
