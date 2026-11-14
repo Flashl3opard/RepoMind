@@ -22,9 +22,14 @@ from app.api.schemas import (
     ReviewResponse,
 )
 from app.config import get_settings
-from app.db.models import Chunk, File, Repository, RepositoryStatus
+from app.db.models import Chunk, File, Repository, RepositoryStatus, ReviewRun, ReviewRunStatus
 from app.db.session import SessionLocal, get_db
-from app.review.github import GitHubError, GitHubRateLimitError, PullRequestNotFoundError
+from app.review.github import (
+    GitHubError,
+    GitHubRateLimitError,
+    PullRequestNotFoundError,
+    parse_pr_url,
+)
 from app.review.graph import ReviewInputError, ReviewTooLargeError, resolve_diff_text, run_review
 from app.services.embeddings import get_embeddings
 from app.services.ingestion import ingest_repository
@@ -202,6 +207,30 @@ def review_repository(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ReviewTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+    # Record this manual run for the dashboard. Unlike webhook runs (deduped on
+    # (repo, pr_number, head_sha) so a redelivered event is a no-op), a manual call
+    # always creates a fresh row -- the caller explicitly asked for a review right
+    # now, so a synthetic, always-unique head_sha avoids any dedup here.
+    pr_number = 0
+    if payload.pr_url is not None:
+        try:
+            _, _, pr_number = parse_pr_url(payload.pr_url)
+        except ValueError:
+            pr_number = 0
+    review_run = ReviewRun(
+        repository_id=repository.id,
+        pr_number=pr_number,
+        head_sha=f"manual-{uuid.uuid4().hex[:12]}",
+        status=ReviewRunStatus.DONE,
+        finding_count=len(result.verified_findings),
+        source="manual",
+        findings=[dict(f) for f in result.verified_findings],
+        summary=result.summary,
+        risk_level=result.risk_level,
+    )
+    db.add(review_run)
+    db.commit()
 
     debug_info = None
     if debug and settings.REVIEW_DEBUG_ENABLED:
