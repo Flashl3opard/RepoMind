@@ -1,0 +1,13 @@
+diff --git a/repomind_demo_notes.py b/repomind_demo_notes.py
+new file mode 100644
+index 0000000..b6fc4c6
+--- /dev/null
++++ b/repomind_demo_notes.py
+@@ -0,0 +1,7 @@
++"""Added by seed_demo.py purely to produce a sample PR review for the dashboard."""
++
++
++def greet(name):
++    # Deliberately unsafe: a real review should flag this as a `security` finding.
++    eval(name)
++    return f"Hello, {name}!"

@@ -78,9 +78,10 @@ class FindingResponse(BaseModel):
     start_line: int
     end_line: int
     severity: Literal["info", "warning", "error"]
-    category: Literal["breaking_change", "bug_risk", "missing_test", "security", "style"]
+    category: Literal["breaking_change", "bug_risk", "missing_test", "security", "style", "contract_change"]
     message: str
     evidence: list[str]
+    caller_usage: str | None = None
 
 
 class ReviewDebugInfo(BaseModel):

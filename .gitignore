@@ -24,8 +24,11 @@ uv.lock.tmp
 frontend/node_modules/
 frontend/dist/
 
-# Generated benchmark artifacts (backend/evals/bench/) -- regenerate with generate.py/run.py
-backend/evals/bench/cases/
+# Generated benchmark artifacts (backend/evals/bench/) -- regenerate with generate.py/run.py.
+# cases/real/ is the exception: hand-curated real-PR holdout cases, meant to be
+# committed (see backend/README.md's "real-PR holdout" note).
+backend/evals/bench/cases/*
+!backend/evals/bench/cases/real/
 backend/evals/bench/results/
 backend/evals/bench/llm_cache/
 

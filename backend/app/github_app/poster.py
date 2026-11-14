@@ -75,9 +75,17 @@ class ExistingComment:
     message_hash: str
 
 
-def existing_comment_keys(raw_comments: list[dict]) -> set[tuple[str, int, str]]:
+def existing_comment_keys(raw_comments: list[dict], bot_login: str) -> set[tuple[str, int, str]]:
+    """Only comments actually posted by this app's own bot user are considered for
+    dedup -- a human leaving an identically-worded review comment must never suppress
+    a real finding. GitHub marks app-authored comments with `user.type == "Bot"` and
+    `user.login == "<slug>[bot]"`; both are checked, not just the login, since a human
+    account cannot have type "Bot" but defense in depth costs nothing here."""
     keys = set()
     for comment in raw_comments:
+        user = comment.get("user") or {}
+        if user.get("login") != bot_login or user.get("type") != "Bot":
+            continue
         path = comment.get("path")
         line = comment.get("line") or comment.get("original_line")
         body = comment.get("body", "")
@@ -185,8 +193,16 @@ def post_review(
     *,
     max_inline: int,
     dry_run: bool,
+    bot_login: str | None = None,
 ) -> PostOutcome:
-    existing = existing_comment_keys(client.list_review_comments(owner, repo, pr_number)) if not dry_run else set()
+    """`bot_login` (the app's own `"<slug>[bot]"` login, from AppIdentityProvider)
+    scopes dedup to comments this app actually posted. If it's None (no GitHub App
+    configured, e.g. a plain PAT token), dedup against prior comments is skipped
+    entirely rather than guessing at identity."""
+    if not dry_run and bot_login is not None:
+        existing = existing_comment_keys(client.list_review_comments(owner, repo, pr_number), bot_login)
+    else:
+        existing = set()
     payload = build_review_payload(result, diff_text, existing, max_inline)
 
     if dry_run:

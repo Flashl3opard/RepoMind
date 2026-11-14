@@ -5,6 +5,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.github_app.auth import (
     JWT_TTL_SECONDS,
+    AppIdentityProvider,
     InstallationTokenProvider,
     create_app_jwt,
     load_private_key,
@@ -128,3 +129,32 @@ def test_installation_tokens_are_cached_independently_per_installation(keypair):
     assert provider.get_token(2) == "token-for-2"
     assert provider.get_token(1) == "token-for-1"
     assert calls == [1, 2]
+
+
+def test_app_identity_provider_resolves_bot_login_from_slug(keypair):
+    private_pem, _ = keypair
+    calls = []
+
+    def fetcher(app_jwt, timeout):
+        calls.append(app_jwt)
+        return {"slug": "repomind", "id": 123}
+
+    provider = AppIdentityProvider("app-id", private_pem, app_info_fetcher=fetcher)
+    assert provider.get_bot_login() == "repomind[bot]"
+    assert len(calls) == 1
+
+
+def test_app_identity_provider_caches_bot_login_across_calls(keypair):
+    private_pem, _ = keypair
+    calls = []
+
+    def fetcher(app_jwt, timeout):
+        calls.append(app_jwt)
+        return {"slug": "repomind", "id": 123}
+
+    provider = AppIdentityProvider("app-id", private_pem, app_info_fetcher=fetcher)
+    first = provider.get_bot_login()
+    second = provider.get_bot_login()
+
+    assert first == second == "repomind[bot]"
+    assert len(calls) == 1  # fetched once, then cached for the life of the process

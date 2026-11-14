@@ -10,7 +10,7 @@ from app.review.impact import ImpactResult
 from app.review.map_changes import ChangedSymbol
 
 Severity = Literal["info", "warning", "error"]
-Category = Literal["breaking_change", "bug_risk", "missing_test", "security", "style"]
+Category = Literal["breaking_change", "bug_risk", "missing_test", "security", "style", "contract_change"]
 RiskLevel = Literal["low", "medium", "high"]
 
 
@@ -25,6 +25,12 @@ class LLMFinding(BaseModel):
     category: Category
     message: str
     evidence: list[str] = Field(default_factory=list, description="[Cn] labels supporting this finding")
+    # Required (and checked) only for category == "contract_change": a short verbatim
+    # quote from the cited caller chunk showing how it actually uses the changed
+    # symbol. See verify.passes_contract_change_gate.
+    caller_usage: str | None = Field(
+        default=None, description="Verbatim quote from a cited caller chunk, required for category='contract_change'"
+    )
 
 
 class LLMReviewOutput(BaseModel):
@@ -39,6 +45,7 @@ class VerifiedFinding(TypedDict):
     category: Category
     message: str
     evidence: list[str]
+    caller_usage: str | None
 
 
 class ReviewState(TypedDict):
