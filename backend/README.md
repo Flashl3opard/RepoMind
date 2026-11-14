@@ -123,6 +123,8 @@ and how many generate/verify attempts the agent needed.
 | `GITHUB_RATE_LIMIT_CAPACITY` | token-bucket capacity per installation (default 5) |
 | `GITHUB_RATE_LIMIT_REFILL_PER_MINUTE` | token-bucket refill rate per installation (default 5.0) |
 | `REVIEW_DRY_RUN`       | logs the would-be review instead of posting it (default `true` -- see below) |
+| `DASHBOARD_API_KEY`    | bearer token required on every route except `/webhooks/github` and `/health`; if unset, only localhost requests are allowed (dev only) -- see [Dashboard API](#dashboard-api) below |
+| `CORS_ALLOWED_ORIGINS` | comma-separated origins allowed via CORS (default: none, since the dashboard frontend calls this API server-side) |
 
 The `chunks.embedding` pgvector column has a fixed dimension (`Settings.EMBEDDING_DIM`,
 default 1536 for `text-embedding-3-small`). Both providers are pinned to produce
@@ -235,6 +237,37 @@ end (the PR's own content is never written to the database):
 
 Add `?debug=true` (only honored when `REVIEW_DEBUG_ENABLED=true`) to also get
 per-symbol change detection and the full labeled context the LLM was shown.
+
+## Dashboard API
+
+Read-only endpoints for the Next.js dashboard (`frontend/`), added in `app/api/dashboard.py`.
+They don't change any ingestion/review/webhook behavior; `ReviewRun` just gained
+`source` (`"webhook"` or `"manual"`), `findings`, `summary` and `risk_level` columns
+(migration `0003`) so a run's full output can be read back later instead of only
+living in the GitHub PR comment or webhook logs. `POST /repos/{id}/review` now also
+creates a `ReviewRun(source="manual")` row for every call, so ad-hoc reviews show up
+in `/repos/{id}/reviews` alongside webhook-triggered ones; webhook idempotency
+(one `ReviewRun` per `(repository_id, head_sha)`) is unchanged.
+
+- `GET /repos` -- id, `full_name`/url, status, commit_sha, file_count, chunk_count,
+  last_ingested_at for every repo.
+- `GET /repos/{id}/reviews` -- that repo's `ReviewRun`s (pr_number, head_sha, status,
+  finding_count, risk_level, created_at), newest first.
+- `GET /reviews/{run_id}` -- one run in full, including `findings`, `summary`,
+  `risk_level` and `error`.
+- `GET /benchmark/latest` -- the most recent `evals/bench/results/<timestamp>.json`,
+  parsed, with `generated_at` taken from the filename; 404 if no benchmark has been run.
+
+### Auth
+
+Every route except `/webhooks/github` (which has its own HMAC signature check) and
+`/health` requires `Authorization: Bearer <DASHBOARD_API_KEY>`, checked with
+`hmac.compare_digest` (`app/api/dashboard_auth.py`, applied as a Starlette
+middleware ahead of routing). If `DASHBOARD_API_KEY` isn't set, the middleware instead
+only allows requests whose client host is `127.0.0.1`/`::1`/`localhost` and a warning
+is logged once at startup -- meant strictly for local dev, not anything reachable from
+the internet. CORS is opt-in via `CORS_ALLOWED_ORIGINS` and off by default, since the
+dashboard calls this API server-side (its own API key never reaches a browser).
 
 ## GitHub App integration & benchmark
 
@@ -445,6 +478,8 @@ app/
   config.py            pydantic-settings config
   main.py               FastAPI app, startup embedding-dimension check
   api/                  routes + request/response schemas
+    dashboard.py           read-only endpoints for the frontend dashboard
+    dashboard_auth.py        bearer-token middleware (localhost fallback if unset)
   db/                    SQLAlchemy models, session, declarative base, startup checks
   parsing/               Tree-sitter based chunk extraction (Python, TypeScript)
   retrieval/

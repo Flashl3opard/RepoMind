@@ -254,6 +254,9 @@ def process_pull_request_review(
 
         run.status = ReviewRunStatus.DONE
         run.finding_count = len(result.verified_findings)
+        run.findings = [dict(f) for f in result.verified_findings]
+        run.summary = result.summary
+        run.risk_level = result.risk_level
         db.commit()
     except Exception as exc:  # noqa: BLE001 - recorded on the ReviewRun row
         logger.exception("Review run %s failed", review_run_id)

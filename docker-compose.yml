@@ -17,5 +17,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional: the Next.js dashboard. Not started by `docker compose up` (that only
+  # brings up `db`, by name, as the Quickstart in the root README does); run
+  # `docker compose --profile frontend up frontend` to also build and start it, or
+  # just run `pnpm dev` in frontend/ against a locally-running backend instead.
+  frontend:
+    build:
+      context: ./frontend
+    container_name: repomind-frontend
+    profiles:
+      - frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:8000}
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
+    ports:
+      - "3000:3000"
+
 volumes:
   repomind-db-data:

@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # Defaults to true: posting to a real PR is a one-way, visible action.
     REVIEW_DRY_RUN: bool = True
 
+    # Dashboard API (app/api/dashboard.py) + auth applied to every route except
+    # /webhooks/github and /health (see app/api/dashboard_auth.py). When unset, only
+    # requests from localhost are allowed and a warning is logged at startup -- meant
+    # for local dev, never for a publicly reachable deployment.
+    DASHBOARD_API_KEY: str | None = None
+    # Comma-separated list of allowed CORS origins. Empty by default: the frontend
+    # calls this API server-side, so no browser origin needs to be allowed at all.
+    CORS_ALLOWED_ORIGINS: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
